@@ -1,0 +1,17 @@
+{
+  "name": "考研背单词 · 默写自测",
+  "short_name": "考研背单词",
+  "description": "考研词汇默写自测：看英文写中文 / 看中文写英文，支持关键词或 AI 语义判分。",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f7fa",
+  "theme_color": "#2f6df0",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

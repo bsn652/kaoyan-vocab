@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>考研背单词 · 默写自测</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#2f6df0">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="考研背单词">
+<link rel="icon" href="./favicon.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <style>
   :root{
     --bg:#f5f7fa; --card:#fff; --ink:#1f2933; --sub:#6b7785;
@@ -363,6 +371,13 @@ function aiJudge(raw){
 }
 
 rebuild(); setMode("en2zh");
+</script>
+<script>
+if("serviceWorker" in navigator){
+  window.addEventListener("load",function(){
+    navigator.serviceWorker.register("./sw.js").catch(function(){});
+  });
+}
 </script>
 </body>
 </html>
