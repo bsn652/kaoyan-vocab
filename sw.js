@@ -1,4 +1,4 @@
-const CACHE = "kaoyan-vocab-v1";
+const CACHE = "kaoyan-vocab-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -28,7 +28,8 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;                 // AI 判分是 POST，直连不拦截
   const url = new URL(req.url);
-  if (url.origin !== location.origin) return;       // 跨域(大模型 API)直连不拦截
+  if (url.origin !== location.origin) return;       // 跨域(大模型 API / SDK CDN)直连不拦截
+  if (url.pathname.indexOf("/.cloud/") === 0) return; // 云服务(登录 / 进度读写)必须走网络，绝不缓存
 
   // 页面导航：联网优先(保证更新)，离线回退缓存
   if (req.mode === "navigate" || req.destination === "document") {

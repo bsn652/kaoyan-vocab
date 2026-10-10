@@ -54,6 +54,16 @@
   .tip{font-size:12px;color:var(--sub);margin-top:14px;background:#fff8ec;border:1px solid #f3e2bf;border-radius:8px;padding:10px 12px}
   .toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:#1f2933;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;opacity:0;transition:.25s;pointer-events:none}
   .toast.show{opacity:1}
+  .acct{display:flex;flex-direction:column;gap:10px}
+  .acct h3{margin:0;font-size:14px;color:var(--sub);font-weight:600}
+  .acct .line{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .acct input{flex:1;min-width:150px;border:1px solid var(--line);border-radius:8px;padding:9px;font-family:inherit;font-size:14px;color:var(--ink);background:#fff}
+  .acct input:focus{outline:none;border-color:var(--brand)}
+  .acct .who{font-size:13px;color:var(--sub)}
+  .acct .who b{color:var(--ink)}
+  .pill{display:inline-block;font-size:12px;padding:3px 10px;border-radius:999px;background:var(--brand2);color:var(--brand);white-space:nowrap}
+  .pill.off{background:#f1f3f6;color:var(--sub)}
+  .pill.err{background:#fdecea;color:var(--bad)}
 </style>
 </head>
 <body>
@@ -65,6 +75,41 @@
       <button id="mZh2en" onclick="setMode('zh2en')">看中文写英文</button>
     </div>
   </header>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="acct">
+      <div class="line" style="justify-content:space-between">
+        <h3>👤 账号 · 登录后进度自动存到云端（换手机/电脑也能接着刷）</h3>
+        <span class="pill off" id="cloudPill">未登录 · 仅本机</span>
+      </div>
+
+      <div id="loginBox">
+        <div class="line">
+          <input id="acctEmail" type="email" placeholder="邮箱（如 you@example.com）" autocomplete="email">
+          <button class="btn ghost" id="btnSendCode" type="button" onclick="sendEmailCode()">获取验证码</button>
+        </div>
+        <div class="line">
+          <input id="acctCode" inputmode="numeric" placeholder="邮箱验证码" autocomplete="one-time-code">
+          <input id="acctPwd" type="password" placeholder="密码（首次注册时设置，老用户可留空）" autocomplete="new-password">
+        </div>
+        <div class="line">
+          <button class="btn primary" type="button" onclick="submitEmailOtp()">登录 / 注册</button>
+          <span class="hint" id="acctMsg" style="margin:0;text-align:left"></span>
+        </div>
+        <div class="hint" style="margin:0;text-align:left;font-size:12px">不登录也能正常背词，数据只存在本机浏览器；登录后错题本 / 熟词本 / 我的单词会同步到你的账号。</div>
+      </div>
+
+      <div id="userBox" style="display:none">
+        <div class="line" style="justify-content:space-between">
+          <span class="who">已登录：<b id="userEmail">—</b>　<span class="hint" id="syncMsg" style="margin:0;display:inline"></span></span>
+          <span class="line" style="gap:8px">
+            <button class="btn ghost" type="button" onclick="forceSync()">立即同步</button>
+            <button class="btn ghost" type="button" onclick="doSignOut()">退出登录</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div class="card">
     <div class="opts">
@@ -150,6 +195,9 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- WorkBuddy 云服务 SDK（CDN 版，无需构建；登录 / 进度云同步用） -->
+<script src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js"></script>
 
 <script>
 // ===== 考研高频词库（精选 ~75 词，含音标/词性/释义）=====
@@ -276,6 +324,7 @@ function finishJudge(raw, correct, near, reason){
   document.getElementById("result").classList.add("show");
   judged=true;
   updateStats();
+  scheduleSync();
 }
 function showAns(){
   const cText = mode==="en2zh" ? (cur.m.join("；")) : (cur.w+(cur.alt&&cur.alt.length?(" / "+cur.alt.join(" / ")):""));
@@ -308,18 +357,22 @@ function addWord(){
   localStorage.setItem(CKEY,JSON.stringify(c)); rebuild(); applyScope();
   document.getElementById("aW").value="";document.getElementById("aPh").value="";document.getElementById("aM").value="";
   toast("已保存，词库总数 "+base.length);
+  scheduleSync();
 }
 function clearWords(){
   if(!confirm("确定清空你添加的所有单词？"))return;
   localStorage.removeItem(CKEY); rebuild(); applyScope(); toast("已清空");
+  scheduleSync();
 }
 function clearWrong(){
   if(!confirm("确定清空错题本？"))return;
   localStorage.removeItem(WKEY); applyScope(); toast("错题本已清空");
+  scheduleSync();
 }
 function clearMastered(){
   if(!confirm("确定清空熟词本？"))return;
   localStorage.removeItem(MKEY); applyScope(); toast("熟词本已清空");
+  scheduleSync();
 }
 function _bookText(which){
   const set = which==="wrong" ? loadWrong() : loadMastered();
@@ -438,7 +491,174 @@ function aiJudge(raw){
     .finally(()=>{ aiPending=false; });
 }
 
-rebuild(); setMode("en2zh");
+// ===== 云服务：账号登录（邮箱+验证码）+ 每人进度云同步 =====
+// publicConfig 由 WorkBuddy 云服务下发；publishableKey 本身不含权限，服务端按 Origin 校验。
+const CLOUD_CFG={
+  endpoint:"https://kaoyan-vocab-50028.app.workbuddy.host",
+  oauthRelayBaseUrl:"https://www.workbuddy.cn/v2/as/genie-baas/oauth",
+  publishableKey:"wbpk_oi6ZrCrCiM0rlAq0BD4yOd_fFwQdrxM6qqcBvBWSvjaLMM2OnQ6pvCC",
+  table:"progress"
+};
+let cloud=null, cloudReady=false, signedIn=false, pushing=false;
+let pendingEmailOtp=null, codeCool=0, codeTimer=null, syncTimer=null;
+
+function $(id){return document.getElementById(id)}
+function setPill(cls,text){const p=$("cloudPill"); if(p){p.className="pill "+cls; p.textContent=text;}}
+function setAcctMsg(t){const e=$("acctMsg"); if(e)e.textContent=t||"";}
+function setSyncMsg(t){const e=$("syncMsg"); if(e)e.textContent=t||"";}
+function hhmm(){const d=new Date(),p=n=>String(n).padStart(2,"0");return p(d.getHours())+":"+p(d.getMinutes());}
+
+function initCloud(){
+  try{
+    if(!(window.WorkBuddyCloud&&window.WorkBuddyCloud.createWorkBuddyCloud)){setPill("off","未登录 · 仅本机");return;}
+    cloud=window.WorkBuddyCloud.createWorkBuddyCloud({
+      endpoint:CLOUD_CFG.endpoint,
+      oauthRelayBaseUrl:CLOUD_CFG.oauthRelayBaseUrl,
+      publishableKey:CLOUD_CFG.publishableKey
+    });
+    cloudReady=true;
+    cloud.auth.getSession().then(function(res){
+      const s=res&&res.data;
+      if(s&&s.user){showUser(s.user);pullProgress();}else{showLogin();}
+    }).catch(function(){showLogin();});
+    if(cloud.auth.onAuthStateChange){
+      cloud.auth.onAuthStateChange(function(ev,sess){
+        if(ev==="SIGNED_OUT"){showLogin();}
+        else if(sess&&sess.user){showUser(sess.user);}
+      });
+    }
+  }catch(e){cloudReady=false;setPill("off","未登录 · 仅本机");}
+}
+
+function showLogin(){
+  signedIn=false;
+  $("loginBox").style.display="";
+  $("userBox").style.display="none";
+  setPill("off","未登录 · 仅本机");
+}
+function showUser(user){
+  signedIn=true;
+  const em=(user&&user.email)||"";
+  $("userEmail").textContent=em||"已登录";
+  $("loginBox").style.display="none";
+  $("userBox").style.display="";
+  setPill("","已登录 · 同步中…");
+}
+
+// —— 获取验证码 / 登录或注册 ——
+function sendEmailCode(){
+  if(!cloudReady){setAcctMsg("云服务未加载，可继续离线使用");return;}
+  const email=($("acctEmail").value||"").trim();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){setAcctMsg("请输入正确的邮箱地址");return;}
+  if(codeCool>0)return;
+  setAcctMsg("发送中…");
+  cloud.auth.sendOtp({email:email}).then(function(res){
+    if(res.error){setAcctMsg("发送失败："+res.error.message);return;}
+    pendingEmailOtp={email:email,verificationId:res.data.verificationId,isExistingUser:res.data.isExistingUser};
+    setAcctMsg("验证码已发送，请到邮箱查收（注意垃圾邮件）");
+    startCool();
+  }).catch(function(){setAcctMsg("发送失败，请检查网络后重试");});
+}
+function startCool(){
+  codeCool=60;
+  const b=$("btnSendCode"); b.disabled=true; b.style.opacity=".6";
+  const tick=function(){
+    if(codeCool<=0){clearInterval(codeTimer);b.disabled=false;b.style.opacity="";b.textContent="获取验证码";return;}
+    b.textContent=codeCool+"s 后重发"; codeCool--;
+  };
+  tick(); codeTimer=setInterval(tick,1000);
+}
+function submitEmailOtp(){
+  if(!cloudReady){setAcctMsg("云服务未加载");return;}
+  const email=($("acctEmail").value||"").trim();
+  const code=($("acctCode").value||"").trim();
+  const pwd=$("acctPwd").value||"";
+  if(!pendingEmailOtp||pendingEmailOtp.email!==email){setAcctMsg("请先获取该邮箱的验证码");return;}
+  if(!code){setAcctMsg("请输入邮箱验证码");return;}
+  if(!pendingEmailOtp.isExistingUser&&!pwd){setAcctMsg("首次注册请设置一个密码（老用户登录可留空）");return;}
+  setAcctMsg("登录中…");
+  cloud.auth.verifyOtp({
+    email:pendingEmailOtp.email,
+    verificationId:pendingEmailOtp.verificationId,
+    isExistingUser:pendingEmailOtp.isExistingUser,
+    token:code,
+    password:pendingEmailOtp.isExistingUser?undefined:pwd
+  }).then(function(res){
+    if(res.error){setAcctMsg("登录失败："+res.error.message);return;}
+    pendingEmailOtp=null; setAcctMsg("");
+    $("acctCode").value=""; $("acctPwd").value="";
+    showUser((res.data&&res.data.user)||{email:email});
+    toast("登录成功，正在同步进度…");
+    pullProgress();
+  }).catch(function(){setAcctMsg("登录失败，请稍后重试");});
+}
+function doSignOut(){
+  if(!cloudReady){showLogin();return;}
+  cloud.auth.signOut().then(function(){showLogin();toast("已退出登录，进度仍保存在本机");})
+    .catch(function(){showLogin();});
+}
+
+// —— 进度云同步：登录后「本地 ∪ 云端」合并，再整行回写 ——
+function localPayload(){return {wrong:[...loadWrong()],mastered:[...loadMastered()],custom:loadCustom()};}
+function mergeProgress(cd){
+  const mergedWrong=new Set([...loadWrong(),...((cd&&cd.wrong)||[])]);
+  const mergedMast=new Set([...loadMastered(),...((cd&&cd.mastered)||[])]);
+  for(const w of mergedWrong) mergedMast.delete(w);   // 同一词两边都有 → 留在错题本（更需要复习）
+  saveWrong(mergedWrong); saveMastered(mergedMast);
+  const map=new Map();
+  const putC=function(x){
+    if(!x||!x.w)return;
+    const ms=(x.m||[]).flat(Infinity).filter(function(s){return typeof s==="string"&&s.trim()});
+    if(!map.has(x.w)){map.set(x.w,{w:x.w,ph:x.ph||"",m:ms.slice()});return;}
+    const p=map.get(x.w),set=new Set(p.m); ms.forEach(function(s){set.add(s)}); p.m=[...set];
+    if(!p.ph&&x.ph)p.ph=x.ph;
+  };
+  loadCustom().forEach(putC); ((cd&&cd.custom)||[]).forEach(putC);
+  const mergedCustom=[...map.values()];
+  localStorage.setItem(CKEY,JSON.stringify(mergedCustom));
+  rebuild(); applyScope(); updateStats();
+  return {wrong:[...mergedWrong],mastered:[...mergedMast],custom:mergedCustom};
+}
+function pullProgress(){
+  if(!cloudReady||!signedIn)return;
+  setSyncMsg("读取云端…");
+  cloud.database.from(CLOUD_CFG.table).select("*").maybeSingle().then(function(res){
+    if(res.error){setSyncMsg("读取云端失败");setPill("err","已登录 · 读取失败");return;}
+    return pushProgress(mergeProgress(res.data||null));
+  }).catch(function(){setSyncMsg("网络异常，稍后自动重试");setPill("err","已登录 · 同步失败");});
+}
+function pushProgress(payload){
+  if(!cloudReady||!signedIn)return Promise.resolve();
+  if(pushing)return Promise.resolve();
+  pushing=true;
+  const row=payload||localPayload();
+  return cloud.database.from(CLOUD_CFG.table).upsert({
+    wrong:row.wrong, mastered:row.mastered, custom:row.custom, updated_at:new Date().toISOString()
+  },{onConflict:"owner_id"}).select().then(function(res){
+    if(res.error){setSyncMsg("保存到云端失败");setPill("err","已登录 · 保存失败");return;}
+    setSyncMsg("已同步 "+hhmm());
+    setPill("","已登录 · 云端同步");
+  }).catch(function(){setSyncMsg("保存失败，稍后重试");})
+   .then(function(){pushing=false;});
+}
+function scheduleSync(){
+  if(!cloudReady||!signedIn)return;
+  if(syncTimer)clearTimeout(syncTimer);
+  syncTimer=setTimeout(function(){pushProgress();},1200);
+}
+function forceSync(){
+  if(!cloudReady||!signedIn){toast("请先登录再同步");return;}
+  setSyncMsg("同步中…");
+  pushProgress().then(function(){toast("已同步到云端");});
+}
+document.addEventListener("visibilitychange",function(){
+  if(document.visibilityState==="hidden"&&signedIn){ if(syncTimer)clearTimeout(syncTimer); pushProgress(); }
+});
+window.addEventListener("pagehide",function(){
+  if(signedIn&&syncTimer){clearTimeout(syncTimer);pushProgress();}
+});
+
+rebuild(); setMode("en2zh"); initCloud();
 </script>
 <script>
 if("serviceWorker" in navigator){
